@@ -9,10 +9,9 @@ st.set_page_config(page_title="Extractor Google Maps - Mi Requínoa", page_icon=
 st.title("📍 Extractor de Negocios desde Google Maps")
 st.markdown("Herramienta oficial conectada a Google Places API (New) para **Requínoa**, **Los Lirios** y **El Abra**.")
 
-# --- BARRA LATERAL: DETECCIÓN AUTOMÁTICA DE LA CLAVE ---
+# --- BARRA LATERAL: CLAVE AUTOMÁTICA O MANUAL ---
 st.sidebar.header("🔑 Conexión con Google Maps")
 
-# Busca la clave en los Secretos de Streamlit; si no existe, muestra la casilla manual
 if "GOOGLE_API_KEY" in st.secrets:
     api_key = st.secrets["GOOGLE_API_KEY"]
     st.sidebar.success("✅ Conectado a Google Maps")
@@ -31,14 +30,15 @@ termino_especifico = st.sidebar.text_input(
     placeholder="Ej: restaurant, taller, panaderia, ferreteria..."
 )
 
-# --- FUNCIÓN CON LA NUEVA API DE GOOGLE (PLACES NEW) ---
+# --- FUNCIÓN DE EXTRACCIÓN CON HORARIOS ---
 def consultar_google_maps_new(query, key):
     url = "https://places.googleapis.com/v1/places:searchText"
     
+    # Se agrega 'places.regularOpeningHours' a la solicitud de Google
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": key,
-        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.websiteUri,places.types,places.editorialSummary"
+        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.websiteUri,places.types,places.editorialSummary,places.regularOpeningHours"
     }
     
     payload = {
@@ -64,6 +64,14 @@ def consultar_google_maps_new(query, key):
         sitio_web = p.get("websiteUri", "")
         resumen = p.get("editorialSummary", {}).get("text", "")
         
+        # Extracción y formateo de los horarios semanales
+        horarios_lista = p.get("regularOpeningHours", {}).get("weekdayDescriptions", [])
+        if horarios_lista:
+            # Los unimos con una barra separadora para que queden limpios en Excel/CSV
+            horarios_texto = " | ".join(horarios_lista)
+        else:
+            horarios_texto = "No informado"
+        
         categoria_limpia = categorizar_negocio(nombre, tipos, resumen)
         
         negocios_extraidos.append({
@@ -72,6 +80,7 @@ def consultar_google_maps_new(query, key):
             "Zona": zona_a_buscar.replace(", Chile", ""),
             "Dirección": direccion,
             "Teléfono": telefono,
+            "Horarios de Atención": horarios_texto,
             "Sitio Web": sitio_web,
             "Descripción": resumen
         })
@@ -96,7 +105,7 @@ if st.sidebar.button("🚀 Extraer Negocios desde Google Maps"):
             else:
                 st.info("No se encontraron resultados con ese criterio.")
 
-# --- MOSTRAR RESULTADOS Y DESCARGA ---
+# --- RESULTADOS Y DESCARGA ---
 df_actual = st.session_state.datos_extraidos
 
 if not df_actual.empty:
@@ -104,7 +113,7 @@ if not df_actual.empty:
     
     col_csv, col_excel, _ = st.columns([1, 1, 3])
     
-    # Descarga CSV
+    # Descargar CSV
     csv_buffer = io.StringIO()
     csv_buffer.write('\ufeff')
     df_actual.to_csv(csv_buffer, index=False, sep=";")
@@ -115,7 +124,7 @@ if not df_actual.empty:
         mime="text/csv"
     )
     
-    # Descarga Excel
+    # Descargar Excel
     excel_buffer = io.BytesIO()
     with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
         df_actual.to_excel(writer, index=False, sheet_name="Negocios")
