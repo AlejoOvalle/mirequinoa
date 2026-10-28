@@ -3,16 +3,9 @@ import pandas as pd
 import requests
 import io
 import time
-from clasificador import (
-    CATEGORIAS_OFICIALES, 
-    categorizar_negocio
-)
+from clasificador import CATEGORIAS_OFICIALES, categorizar_negocio
 
-st.set_page_config(
-    page_title="Mi Requínoa IA", 
-    page_icon="📍", 
-    layout="wide"
-)
+st.set_page_config(page_title="Mi Requínoa IA", page_icon="📍", layout="wide")
 
 st.title("📍 Directorio Comercial con Redacción IA")
 st.markdown("Comunas: **Requínoa**, **Los Lirios** y **El Abra**.")
@@ -20,23 +13,13 @@ st.markdown("Comunas: **Requínoa**, **Los Lirios** y **El Abra**.")
 # --- CLAVES ---
 st.sidebar.header("🔑 Claves")
 
-if "GOOGLE_MAPS_KEY" in st.secrets:
-    maps_key = st.secrets["GOOGLE_MAPS_KEY"]
-elif "GOOGLE_API_KEY" in st.secrets:
-    maps_key = st.secrets["GOOGLE_API_KEY"]
-else:
-    maps_key = st.sidebar.text_input(
-        "Google Maps Key", 
-        type="password"
-    )
+maps_key = st.secrets.get("GOOGLE_MAPS_KEY", "") or st.secrets.get("GOOGLE_API_KEY", "")
+gemini_key = st.secrets.get("GEMINI_API_KEY", "")
 
-if "GEMINI_API_KEY" in st.secrets:
-    gemini_key = st.secrets["GEMINI_API_KEY"]
-else:
-    gemini_key = st.sidebar.text_input(
-        "Gemini Key", 
-        type="password"
-    )
+if not maps_key:
+    maps_key = st.sidebar.text_input("Google Maps Key", type="password")
+if not gemini_key:
+    gemini_key = st.sidebar.text_input("Gemini Key", type="password")
 
 if maps_key and gemini_key:
     st.sidebar.success("✅ Conectado a Maps & Gemini")
@@ -47,17 +30,9 @@ st.sidebar.divider()
 
 # --- PARÁMETROS ---
 st.sidebar.header("🎯 Búsqueda")
-
-sectores = [
-    "Requínoa, Chile", 
-    "Los Lirios, Requínoa, Chile", 
-    "El Abra, Requínoa, Chile", 
-    "Comuna de Requínoa, Chile"
-]
-
 zona_a_buscar = st.sidebar.selectbox(
     "Sector", 
-    sectores
+    ["Requínoa, Chile", "Los Lirios, Requínoa, Chile", "El Abra, Requínoa, Chile", "Comuna de Requínoa, Chile"]
 )
 
 termino_especifico = st.sidebar.text_input(
@@ -65,62 +40,64 @@ termino_especifico = st.sidebar.text_input(
     placeholder="Ej: peluqueria, taller..."
 )
 
-# BOTÓN
-boton_buscar = st.sidebar.button(
-    "🚀 Extraer y Redactar con IA", 
-    type="primary"
-)
+boton_buscar = st.sidebar.button("🚀 Extraer y Redactar con IA", type="primary")
 
-# --- REDACTAR CON IA ---
+# --- REDACTAR CON IA (PROMPT HUMANO Y NATURAL) ---
 def redactar_descripcion_ia(nombre, rubro, reviews, key):
     if not key:
-        return f"{rubro} en {nombre}."
+        return "Servicio comercial local ubicado en la comuna."
         
-    url = "https://generativelanguage.googleapis.com"
-    url += f"/v1beta/models/gemini-1.5-flash:generateContent"
-    url += f"?key={key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={key}"
     
     prompt = f"""
-    Redacta una guía comercial en Chile.
-    Descripción atractiva de MÁXIMO 320 CARACTERES.
-    Sin saludos ni comillas. Directo al grano.
-    Local: {nombre} | Rubro: {rubro} | Opiniones: {reviews}
+    Eres un redactor chileno experto en guías comerciales locales.
+    Escribe una descripción humana, atractiva y cercana para este negocio en Requínoa.
+    
+    REGLAS:
+    - Longitud: MÁXIMO 280 CARACTERES.
+    - Tono: Cálido, profesional y descriptivo.
+    - NUNCA uses frases robot como "Atención al cliente en...", "Este negocio ofrece...", ni repitas el nombre de forma tonta.
+    - Menciona especialidades y ambiente.
+    
+    EJEMPLO DE LO QUE QUIERO:
+    "Salón de belleza y peluquería atendido por profesionales. Especialistas en corte unisex, colorimetría y tratamientos capilares en un ambiente acogedor y cómodo."
+    
+    DATOS DEL NEGOCIO:
+    - Nombre: {nombre}
+    - Rubro: {rubro}
+    - Lo que dice la gente: {reviews}
     """
     
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": 0.4, 
-            "maxOutputTokens": 100
-        }
+        "generationConfig": {"temperature": 0.7, "maxOutputTokens": 120}
     }
     
     try:
-        resp = requests.post(url, json=payload, timeout=8)
+        resp = requests.post(url, json=payload, timeout=10)
         data = resp.json()
-        cand = data["candidates"][0]["content"]["parts"][0]
-        texto = cand["text"].strip()
+        
+        if "error" in data:
+            # Si hay error en la clave, lo mostramos
+            return f"[Error Gemini: {data['error'].get('message', 'Clave sin permisos')}]"
+            
+        texto = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        # Limpiar comillas extras si las pone
+        texto = texto.replace('"', '').replace('\n', ' ')
         if len(texto) > 320:
             texto = texto[:317] + "..."
         return texto
-    except Exception:
-        return f"{rubro}. Atención al cliente en {nombre}."
+    except Exception as e:
+        return f"Comercio de {rubro} en {nombre}."
 
 # --- CONSULTAR GOOGLE MAPS ---
 def consultar_google_maps_new(query, m_key, g_key, zona):
     url = "https://places.googleapis.com/v1/places:searchText"
     
     mascara = [
-        "places.displayName",
-        "places.formattedAddress",
-        "places.nationalPhoneNumber",
-        "places.websiteUri",
-        "places.types",
-        "places.primaryTypeDisplayName",
-        "places.rating",
-        "places.regularOpeningHours",
-        "places.photos",
-        "places.reviews"
+        "places.displayName", "places.formattedAddress", "places.nationalPhoneNumber",
+        "places.websiteUri", "places.types", "places.primaryTypeDisplayName",
+        "places.rating", "places.regularOpeningHours", "places.photos", "places.reviews"
     ]
     
     headers = {
@@ -129,16 +106,12 @@ def consultar_google_maps_new(query, m_key, g_key, zona):
         "X-Goog-FieldMask": ",".join(mascara)
     }
     
-    payload = {
-        "textQuery": query, 
-        "languageCode": "es"
-    }
-    
+    payload = {"textQuery": query, "languageCode": "es"}
     resp = requests.post(url, headers=headers, json=payload)
     data = resp.json()
     
     if "error" in data:
-        st.error(data['error'].get('message', 'Error'))
+        st.error(f"Error Google Maps: {data['error'].get('message')}")
         return pd.DataFrame()
         
     lugares = data.get("places", [])
@@ -147,15 +120,12 @@ def consultar_google_maps_new(query, m_key, g_key, zona):
         return pd.DataFrame()
 
     negocios = []
-    progreso = st.progress(0, text="Procesando...")
+    progreso = st.progress(0, text="Procesando con Inteligencia Artificial...")
     
     for i, p in enumerate(lugares):
         nombre = p.get("displayName", {}).get("text", "")
         tipos_raw = ", ".join(p.get("types", []))
-        
-        rubro_obj = p.get("primaryTypeDisplayName", {})
-        rubro_es = rubro_obj.get("text", "Comercio")
-        
+        rubro_es = p.get("primaryTypeDisplayName", {}).get("text", "Comercio")
         direccion = p.get("formattedAddress", "")
         telefono = p.get("nationalPhoneNumber", "")
         sitio_web = p.get("websiteUri", "")
@@ -163,39 +133,23 @@ def consultar_google_maps_new(query, m_key, g_key, zona):
         # Horarios
         hours_obj = p.get("regularOpeningHours", {})
         horarios_list = hours_obj.get("weekdayDescriptions", [])
-        if horarios_list:
-            horarios = " | ".join(horarios_list)
-        else:
-            horarios = "No informado"
+        horarios = " | ".join(horarios_list) if horarios_list else "No informado"
         
-        # Foto (construida en líneas cortas)
+        # Foto
         fotos = p.get("photos", [])
-        if fotos:
-            f_name = fotos[0].get("name", "")
-            url_foto = "https://places.googleapis.com/v1/"
-            url_foto += f"{f_name}/media?maxWidthPx=400"
-            url_foto += f"&key={m_key}"
-        else:
-            url_foto = ""
+        url_foto = f"https://places.googleapis.com/v1/{fotos[0].get('name')}/media?maxWidthPx=400&key={m_key}" if fotos else ""
         
-        # Reviews
+        # Reseñas
         revs = p.get("reviews", [])
-        opiniones = " ".join(
-            [r.get("text", {}).get("text", "") for r in revs[:3]]
-        ) if revs else "Buena atención."
+        opiniones = " ".join([r.get("text", {}).get("text", "") for r in revs[:3]]) if revs else "Buena atención y servicio."
         
-        progreso.progress(
-            (i + 1) / total, 
-            text=f"Redactando: {nombre}..."
-        )
+        progreso.progress((i + 1) / total, text=f"Redactando con IA: {nombre} ({i+1}/{total})...")
         
-        desc_ia = redactar_descripcion_ia(
-            nombre, rubro_es, opiniones, g_key
-        )
+        # LLAMADA A GEMINI
+        desc_ia = redactar_descripcion_ia(nombre, rubro_es, opiniones, g_key)
         
-        cat_limpia = categorizar_negocio(
-            nombre, tipos_raw, desc_ia
-        )
+        # CLASIFICACIÓN
+        cat_limpia = categorizar_negocio(nombre, tipos_raw, desc_ia)
         
         negocios.append({
             "Foto": url_foto,
@@ -221,23 +175,17 @@ if boton_buscar:
     if not maps_key:
         st.warning("⚠️ Falta la clave de Google Maps.")
     else:
-        if termino_especifico:
-            query = f"{termino_especifico} en {zona_a_buscar}"
-        else:
-            query = f"comercios en {zona_a_buscar}"
-            
-        with st.spinner(f"Buscando: '{query}'..."):
-            df_res = consultar_google_maps_new(
-                query, maps_key, gemini_key, zona_a_buscar
-            )
+        query = f"{termino_especifico} en {zona_a_buscar}".strip() if termino_especifico else f"comercios en {zona_a_buscar}"
+        with st.spinner(f"Buscando y redactando para: '{query}'..."):
+            df_res = consultar_google_maps_new(query, maps_key, gemini_key, zona_a_buscar)
             
             if not df_res.empty:
                 st.session_state.datos_extraidos = df_res
-                st.success(f"¡Se encontraron {len(df_res)} comercios!")
+                st.success(f"¡Se encontraron y redactaron {len(df_res)} comercios con IA!")
             else:
                 st.info("No hubo resultados.")
 
-# --- DESCARGAS Y TABLA ---
+# --- TABLA Y DESCARGAS ---
 df_actual = st.session_state.datos_extraidos
 
 if not df_actual.empty:
@@ -274,10 +222,7 @@ if not df_actual.empty:
         hide_index=True,
         column_config={
             "Foto": st.column_config.ImageColumn("Foto"),
-            "Descripción (IA)": st.column_config.TextColumn(
-                "Descripción IA", 
-                width="large"
-            ),
+            "Descripción (IA)": st.column_config.TextColumn("Descripción IA", width="large"),
             "Sitio Web": st.column_config.LinkColumn("Sitio Web"),
             "Teléfono": st.column_config.TextColumn("Teléfono")
         }
