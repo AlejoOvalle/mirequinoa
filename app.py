@@ -15,7 +15,7 @@ st.sidebar.header("🔑 Conexión con Google Maps")
 
 # Campo para la clave de Google
 api_key = st.sidebar.text_input(
-    "Google Places API Key", 
+    "AIzaSyAX3XL5iu_z0yBLfCcGaS1JEtSXvK9S20g", 
     type="password", 
     help="Clave que obtienes gratis en Google Cloud Console con Places API habilitada."
 )
