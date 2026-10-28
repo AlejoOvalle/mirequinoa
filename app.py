@@ -42,30 +42,29 @@ termino_especifico = st.sidebar.text_input(
 
 boton_buscar = st.sidebar.button("🚀 Extraer y Redactar con IA", type="primary")
 
-# --- REDACTAR CON IA (PROMPT HUMANO Y NATURAL) ---
+# --- REDACTAR CON IA (COMPATIBLE CON V1 Y AUTO-DETECCIÓN) ---
 def redactar_descripcion_ia(nombre, rubro, reviews, key):
     if not key:
         return "Servicio comercial local ubicado en la comuna."
-        
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={key}"
+    
+    # Probamos primero con la versión oficial estable v1
+    modelos_a_probar = [
+        "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent",
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+        "https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent"
+    ]
     
     prompt = f"""
-    Eres un redactor chileno experto en guías comerciales locales.
-    Escribe una descripción humana, atractiva y cercana para este negocio en Requínoa.
+    Eres un redactor chileno de guías comerciales locales.
+    Escribe una descripción humana, atractiva y fluida para este local en Requínoa.
     
     REGLAS:
     - Longitud: MÁXIMO 280 CARACTERES.
-    - Tono: Cálido, profesional y descriptivo.
-    - NUNCA uses frases robot como "Atención al cliente en...", "Este negocio ofrece...", ni repitas el nombre de forma tonta.
-    - Menciona especialidades y ambiente.
+    - Tono: Cálido, profesional y cercano.
+    - NUNCA uses frases robot como "Atención al cliente en...", "Este negocio ofrece...".
+    - Directo a las especialidades y ambiente.
     
-    EJEMPLO DE LO QUE QUIERO:
-    "Salón de belleza y peluquería atendido por profesionales. Especialistas en corte unisex, colorimetría y tratamientos capilares en un ambiente acogedor y cómodo."
-    
-    DATOS DEL NEGOCIO:
-    - Nombre: {nombre}
-    - Rubro: {rubro}
-    - Lo que dice la gente: {reviews}
+    Local: {nombre} | Rubro: {rubro} | Opiniones: {reviews}
     """
     
     payload = {
@@ -73,22 +72,24 @@ def redactar_descripcion_ia(nombre, rubro, reviews, key):
         "generationConfig": {"temperature": 0.7, "maxOutputTokens": 120}
     }
     
-    try:
-        resp = requests.post(url, json=payload, timeout=10)
-        data = resp.json()
-        
-        if "error" in data:
-            # Si hay error en la clave, lo mostramos
-            return f"[Error Gemini: {data['error'].get('message', 'Clave sin permisos')}]"
+    ultimo_error = ""
+    for endpoint in modelos_a_probar:
+        try:
+            url = f"{endpoint}?key={key}"
+            resp = requests.post(url, json=payload, timeout=8)
+            data = resp.json()
             
-        texto = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-        # Limpiar comillas extras si las pone
-        texto = texto.replace('"', '').replace('\n', ' ')
-        if len(texto) > 320:
-            texto = texto[:317] + "..."
-        return texto
-    except Exception as e:
-        return f"Comercio de {rubro} en {nombre}."
+            if "candidates" in data:
+                texto = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                texto = texto.replace('"', '').replace('\n', ' ')
+                return (texto[:317] + "...") if len(texto) > 320 else texto
+            elif "error" in data:
+                ultimo_error = data["error"].get("message", "")
+        except Exception as e:
+            ultimo_error = str(e)
+            
+    # Si ningún modelo funcionó, revisamos si la clave es de AI Studio
+    return f"[Aviso IA: Clave sin acceso a Gemini. Asegúrate de usar una clave de aistudio.google.com ({ultimo_error[:60]})]"
 
 # --- CONSULTAR GOOGLE MAPS ---
 def consultar_google_maps_new(query, m_key, g_key, zona):
