@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import requests
 import io
-import time
 from clasificador import CATEGORIAS_OFICIALES, categorizar_negocio
 
 st.set_page_config(page_title="Extractor Google Maps - Mi Requínoa", page_icon="📍", layout="wide")
@@ -10,9 +9,15 @@ st.set_page_config(page_title="Extractor Google Maps - Mi Requínoa", page_icon=
 st.title("📍 Extractor de Negocios desde Google Maps")
 st.markdown("Herramienta oficial conectada a Google Places API (New) para **Requínoa**, **Los Lirios** y **El Abra**.")
 
-# --- BARRA LATERAL ---
+# --- BARRA LATERAL: DETECCIÓN AUTOMÁTICA DE LA CLAVE ---
 st.sidebar.header("🔑 Conexión con Google Maps")
-api_key = st.sidebar.text_input("Google Places API Key", type="password")
+
+# Busca la clave en los Secretos de Streamlit; si no existe, muestra la casilla manual
+if "GOOGLE_API_KEY" in st.secrets:
+    api_key = st.secrets["GOOGLE_API_KEY"]
+    st.sidebar.success("✅ Conectado a Google Maps")
+else:
+    api_key = st.sidebar.text_input("Google Places API Key", type="password")
 
 st.sidebar.divider()
 st.sidebar.header("🎯 Parámetros de Extracción")
@@ -33,7 +38,6 @@ def consultar_google_maps_new(query, key):
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": key,
-        # Pedimos los datos necesarios en una sola consulta
         "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.websiteUri,places.types,places.editorialSummary"
     }
     
@@ -60,7 +64,6 @@ def consultar_google_maps_new(query, key):
         sitio_web = p.get("websiteUri", "")
         resumen = p.get("editorialSummary", {}).get("text", "")
         
-        # Clasificar automáticamente con tu taxonomía
         categoria_limpia = categorizar_negocio(nombre, tipos, resumen)
         
         negocios_extraidos.append({
@@ -81,7 +84,7 @@ if "datos_extraidos" not in st.session_state:
 
 if st.sidebar.button("🚀 Extraer Negocios desde Google Maps"):
     if not api_key:
-        st.warning("⚠️ Debes ingresar tu clave de Google arriba.")
+        st.warning("⚠️ No se encontró la clave de API.")
     else:
         query = f"{termino_especifico} en {zona_a_buscar}".strip() if termino_especifico else f"comercios en {zona_a_buscar}"
         with st.spinner(f"Consultando Google Maps para: '{query}'..."):
