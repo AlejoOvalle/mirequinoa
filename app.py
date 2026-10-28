@@ -47,7 +47,7 @@ def redactar_descripcion_ia(nombre, rubro, reviews, key):
     if not key:
         return "Servicio comercial local ubicado en la comuna."
         
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={key}"
     
     prompt = f"""
     Eres un redactor chileno experto en guías comerciales locales.
