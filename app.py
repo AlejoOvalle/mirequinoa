@@ -12,11 +12,19 @@ st.set_page_config(
 @st.cache_data
 def load_data():
     try:
-        df = pd.read_csv("data/negocios.csv")
-    except FileNotFoundError:
+        # Detecta automáticamente si el archivo usa ';' o ',' y evita que se caiga
+        df = pd.read_csv("data/negocios.csv", sep=None, engine='python', on_bad_lines='skip')
+    except Exception:
         df = pd.DataFrame(columns=["Nombre", "Zona", "Tipo de Negocio", "Dirección", "Teléfono", "Email", "Sitio Web", "Descripción"])
     
     df = df.fillna("")
+    
+    # Asegurar que las columnas requeridas existan
+    cols_requeridas = ["Nombre", "Zona", "Tipo de Negocio", "Dirección", "Teléfono", "Email", "Sitio Web", "Descripción"]
+    for col in cols_requeridas:
+        if col not in df.columns:
+            df[col] = ""
+
     df["Tipo de Negocio"] = df.apply(
         lambda r: categorizar_negocio(str(r["Nombre"]), str(r["Tipo de Negocio"]), str(r["Descripción"])),
         axis=1
@@ -68,7 +76,6 @@ st.divider()
 st.subheader("Descargar Resultados")
 col_csv, col_excel, _ = st.columns([1, 1, 3])
 
-# CSV compatible con Excel en español
 csv_buffer = io.StringIO()
 csv_buffer.write('\ufeff')
 df_filtrado.to_csv(csv_buffer, index=False, sep=";")
@@ -80,7 +87,6 @@ col_csv.download_button(
     mime="text/csv"
 )
 
-# Excel nativo
 excel_buffer = io.BytesIO()
 with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
     df_filtrado.to_excel(writer, index=False, sheet_name="Directorio")
