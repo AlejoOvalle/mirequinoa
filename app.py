@@ -7,7 +7,7 @@ from clasificador import CATEGORIAS_OFICIALES, categorizar_negocio
 st.set_page_config(page_title="Extractor Google Maps - Mi Requínoa", page_icon="📍", layout="wide")
 
 st.title("📍 Extractor de Negocios desde Google Maps & My Business")
-st.markdown("Herramienta oficial para extraer comercios, horarios y fotos en **Requínoa**, **Los Lirios** y **El Abra**.")
+st.markdown("Herramienta oficial para extraer comercios, horarios, fotos y atributos en **Requínoa**, **Los Lirios** y **El Abra**.")
 
 # --- BARRA LATERAL ---
 st.sidebar.header("🔑 Conexión con Google Maps")
@@ -30,15 +30,20 @@ termino_especifico = st.sidebar.text_input(
     placeholder="Ej: restaurant, taller, panaderia, ferreteria..."
 )
 
-# --- FUNCIÓN DE EXTRACCIÓN (INCLUYE FOTOS Y HORARIOS) ---
+# --- FUNCIÓN DE EXTRACCIÓN CON "ACERCA DE" Y ATRIBUTOS ---
 def consultar_google_maps_new(query, key):
     url = "https://places.googleapis.com/v1/places:searchText"
     
-    # Se agrega 'places.photos' en los campos solicitados
+    # Solicitamos atributos reales: tipo primario, rating, opciones de servicio y reviews
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": key,
-        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.websiteUri,places.types,places.editorialSummary,places.regularOpeningHours,places.photos"
+        "X-Goog-FieldMask": (
+            "places.displayName,places.formattedAddress,places.nationalPhoneNumber,"
+            "places.websiteUri,places.types,places.primaryTypeDisplayName,places.rating,"
+            "places.userRatingCount,places.regularOpeningHours,places.photos,"
+            "places.delivery,places.dineIn,places.takeout,places.reviews"
+        )
     }
     
     payload = {
@@ -58,26 +63,55 @@ def consultar_google_maps_new(query, key):
     
     for p in lugares:
         nombre = p.get("displayName", {}).get("text", "")
-        tipos = ", ".join(p.get("types", []))
+        tipos_raw = ", ".join(p.get("types", []))
         direccion = p.get("formattedAddress", "")
         telefono = p.get("nationalPhoneNumber", "")
         sitio_web = p.get("websiteUri", "")
-        resumen = p.get("editorialSummary", {}).get("text", "")
         
-        # Horarios
+        # 1. Horarios
         horarios_lista = p.get("regularOpeningHours", {}).get("weekdayDescriptions", [])
         horarios_texto = " | ".join(horarios_lista) if horarios_lista else "No informado"
         
-        # Foto de referencia principal
+        # 2. Foto de portada
         fotos = p.get("photos", [])
-        if fotos:
-            nombre_foto = fotos[0].get("name") # Formato: places/.../photos/...
-            # URL oficial que descarga la foto en tamaño mediano (máximo 400px de ancho)
-            url_foto = f"https://places.googleapis.com/v1/{nombre_foto}/media?maxWidthPx=400&key={key}"
-        else:
-            url_foto = ""
+        url_foto = f"https://places.googleapis.com/v1/{fotos[0].get('name')}/media?maxWidthPx=400&key={key}" if fotos else ""
         
-        categoria_limpia = categorizar_negocio(nombre, tipos, resumen)
+        # 3. Construcción del "Acerca de / Descripción"
+        detalles_acerca_de = []
+        
+        # Rubro específico en español
+        rubro_es = p.get("primaryTypeDisplayName", {}).get("text")
+        if rubro_es:
+            detalles_acerca_de.append(rubro_es)
+            
+        # Calificación
+        rating = p.get("rating")
+        total_votos = p.get("userRatingCount")
+        if rating:
+            detalles_acerca_de.append(f"⭐ {rating} ({total_votos or 0} opiniones)")
+            
+        # Servicios detectados (delivery, retiro, etc.)
+        servicios = []
+        if p.get("delivery"): servicios.append("Delivery")
+        if p.get("takeout"): servicios.append("Para llevar")
+        if p.get("dineIn"): servicios.append("Consumo en el lugar")
+        if servicios:
+            detalles_acerca_de.append("Servicios: " + ", ".join(servicios))
+            
+        # Reseña de un cliente real (lo que mejor describe al local)
+        reviews = p.get("reviews", [])
+        if reviews:
+            texto_review = reviews[0].get("text", {}).get("text", "")
+            if texto_review:
+                # Limitar a 140 caracteres para que no desborde la planilla
+                corta = (texto_review[:137] + '...') if len(texto_review) > 140 else texto_review
+                detalles_acerca_de.append(f'Opción cliente: "{corta}"')
+                
+        # Unir todo en un texto enriquecido
+        descripcion_final = " | ".join(detalles_acerca_de) if detalles_acerca_de else "Comercio local registrado"
+        
+        # Clasificar con tu taxonomía
+        categoria_limpia = categorizar_negocio(nombre, tipos_raw, descripcion_final)
         
         negocios_extraidos.append({
             "Foto": url_foto,
@@ -88,7 +122,7 @@ def consultar_google_maps_new(query, key):
             "Teléfono": telefono,
             "Horarios de Atención": horarios_texto,
             "Sitio Web": sitio_web,
-            "Descripción": resumen
+            "Acerca de / Descripción": descripcion_final
         })
         
     return pd.DataFrame(negocios_extraidos)
@@ -107,7 +141,7 @@ if st.sidebar.button("🚀 Extraer Negocios desde Google Maps"):
             
             if not df_resultado.empty:
                 st.session_state.datos_extraidos = df_resultado
-                st.success(f"¡Éxito! Se encontraron {len(df_resultado)} comercios con sus datos y fotos.")
+                st.success(f"¡Éxito! Se encontraron {len(df_resultado)} comercios con información completa.")
             else:
                 st.info("No se encontraron resultados con ese criterio.")
 
@@ -143,14 +177,15 @@ if not df_actual.empty:
     
     st.write("")
     
-    # Visualización en tabla con miniatura de la imagen
+    # Tabla con previsualización
     st.dataframe(
         df_actual,
         use_container_width=True,
         hide_index=True,
         column_config={
-            "Foto": st.column_config.ImageColumn("Foto de Portada", help="Foto principal del local"),
+            "Foto": st.column_config.ImageColumn("Foto", help="Foto de portada"),
             "Sitio Web": st.column_config.LinkColumn("Sitio Web"),
-            "Teléfono": st.column_config.TextColumn("Teléfono")
+            "Teléfono": st.column_config.TextColumn("Teléfono"),
+            "Acerca de / Descripción": st.column_config.TextColumn("Acerca de / Resumen", width="large")
         }
     )
