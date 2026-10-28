@@ -6,10 +6,10 @@ from clasificador import CATEGORIAS_OFICIALES, categorizar_negocio
 
 st.set_page_config(page_title="Extractor Google Maps - Mi Requínoa", page_icon="📍", layout="wide")
 
-st.title("📍 Extractor de Negocios desde Google Maps")
-st.markdown("Herramienta oficial conectada a Google Places API (New) para **Requínoa**, **Los Lirios** y **El Abra**.")
+st.title("📍 Extractor de Negocios desde Google Maps & My Business")
+st.markdown("Herramienta oficial para extraer comercios, horarios y fotos en **Requínoa**, **Los Lirios** y **El Abra**.")
 
-# --- BARRA LATERAL: CLAVE AUTOMÁTICA O MANUAL ---
+# --- BARRA LATERAL ---
 st.sidebar.header("🔑 Conexión con Google Maps")
 
 if "GOOGLE_API_KEY" in st.secrets:
@@ -30,15 +30,15 @@ termino_especifico = st.sidebar.text_input(
     placeholder="Ej: restaurant, taller, panaderia, ferreteria..."
 )
 
-# --- FUNCIÓN DE EXTRACCIÓN CON HORARIOS ---
+# --- FUNCIÓN DE EXTRACCIÓN (INCLUYE FOTOS Y HORARIOS) ---
 def consultar_google_maps_new(query, key):
     url = "https://places.googleapis.com/v1/places:searchText"
     
-    # Se agrega 'places.regularOpeningHours' a la solicitud de Google
+    # Se agrega 'places.photos' en los campos solicitados
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": key,
-        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.websiteUri,places.types,places.editorialSummary,places.regularOpeningHours"
+        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.websiteUri,places.types,places.editorialSummary,places.regularOpeningHours,places.photos"
     }
     
     payload = {
@@ -64,17 +64,23 @@ def consultar_google_maps_new(query, key):
         sitio_web = p.get("websiteUri", "")
         resumen = p.get("editorialSummary", {}).get("text", "")
         
-        # Extracción y formateo de los horarios semanales
+        # Horarios
         horarios_lista = p.get("regularOpeningHours", {}).get("weekdayDescriptions", [])
-        if horarios_lista:
-            # Los unimos con una barra separadora para que queden limpios en Excel/CSV
-            horarios_texto = " | ".join(horarios_lista)
+        horarios_texto = " | ".join(horarios_lista) if horarios_lista else "No informado"
+        
+        # Foto de referencia principal
+        fotos = p.get("photos", [])
+        if fotos:
+            nombre_foto = fotos[0].get("name") # Formato: places/.../photos/...
+            # URL oficial que descarga la foto en tamaño mediano (máximo 400px de ancho)
+            url_foto = f"https://places.googleapis.com/v1/{nombre_foto}/media?maxWidthPx=400&key={key}"
         else:
-            horarios_texto = "No informado"
+            url_foto = ""
         
         categoria_limpia = categorizar_negocio(nombre, tipos, resumen)
         
         negocios_extraidos.append({
+            "Foto": url_foto,
             "Nombre": nombre,
             "Categoría Asignada": categoria_limpia,
             "Zona": zona_a_buscar.replace(", Chile", ""),
@@ -101,7 +107,7 @@ if st.sidebar.button("🚀 Extraer Negocios desde Google Maps"):
             
             if not df_resultado.empty:
                 st.session_state.datos_extraidos = df_resultado
-                st.success(f"¡Éxito! Se encontraron {len(df_resultado)} comercios.")
+                st.success(f"¡Éxito! Se encontraron {len(df_resultado)} comercios con sus datos y fotos.")
             else:
                 st.info("No se encontraron resultados con ese criterio.")
 
@@ -136,4 +142,15 @@ if not df_actual.empty:
     )
     
     st.write("")
-    st.dataframe(df_actual, use_container_width=True)
+    
+    # Visualización en tabla con miniatura de la imagen
+    st.dataframe(
+        df_actual,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Foto": st.column_config.ImageColumn("Foto de Portada", help="Foto principal del local"),
+            "Sitio Web": st.column_config.LinkColumn("Sitio Web"),
+            "Teléfono": st.column_config.TextColumn("Teléfono")
+        }
+    )
