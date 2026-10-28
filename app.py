@@ -50,4 +50,5 @@ zona_a_buscar = st.sidebar.selectbox(
 
 termino_especifico = st.sidebar.text_input(
     "Rubro o negocio específico (opcional)", 
-    placeholder="Ej: peluqueria, taller, restau
+    placeholder="Ej: peluqueria, taller, restaurante..."
+)
