@@ -2,18 +2,19 @@ import streamlit as st
 import pandas as pd
 import requests
 import io
+import time
 from clasificador import CATEGORIAS_OFICIALES, categorizar_negocio
 
 st.set_page_config(
-    page_title="Extractor FindAll WP - Mi Requínoa", 
+    page_title="Extractor Comunal FindAll - Mi Requínoa", 
     page_icon="📍", 
     layout="wide"
 )
 
-st.title("📍 Extractor de Negocios para FindAll (WordPress)")
-st.markdown("Genera archivos compatibles directamente con **WP All Import** para el tema FindAll.")
+st.title("📍 Extractor Comunal Unificado para FindAll (WordPress)")
+st.markdown("Escaneo simultáneo en **Requínoa**, **Los Lirios** y **El Abra** con salida lista para **WP All Import**.")
 
-# --- CONEXIÓN ---
+# --- CONEXIÓN DE CLAVE ---
 st.sidebar.header("🔑 Conexión")
 maps_key = st.secrets.get("GOOGLE_MAPS_KEY", "") or st.secrets.get("GOOGLE_API_KEY", "")
 
@@ -27,22 +28,19 @@ else:
 
 st.sidebar.divider()
 
-# --- PARÁMETROS ---
-st.sidebar.header("🎯 Parámetros de Búsqueda")
-zona_a_buscar = st.sidebar.selectbox(
-    "Localidad / Ubicación (Taxonomía WP)", 
-    ["Requínoa", "Los Lirios", "El Abra", "Comuna de Requínoa"]
-)
+# --- PARÁMETROS DE BÚSQUEDA ---
+st.sidebar.header("🎯 Parámetros de Extracción")
+st.sidebar.info("📍 **Sectores incluidos:**\n- Requínoa Centro\n- Los Lirios\n- El Abra")
 
 termino_especifico = st.sidebar.text_input(
-    "Rubro a buscar (opcional)", 
-    placeholder="Ej: ferreteria, restaurante, taller..."
+    "Rubro o término a buscar", 
+    placeholder="Ej: ferreteria, restaurante, almacen, peluqueria..."
 )
 
-boton_buscar = st.sidebar.button("🚀 Extraer Datos para WordPress", type="primary")
+boton_buscar = st.sidebar.button("🚀 Escanear Toda la Comuna", type="primary")
 
-# --- CONSULTA A GOOGLE MAPS ---
-def consultar_google_maps(query, key, zona_taxonomia):
+# --- FUNCIÓN DE CONSULTA POR SECTOR ---
+def consultar_sector(query, key, sector_nombre):
     url = "https://places.googleapis.com/v1/places:searchText"
     
     mascara = [
@@ -70,14 +68,11 @@ def consultar_google_maps(query, key, zona_taxonomia):
     data = resp.json()
     
     if "error" in data:
-        st.error(f"Error de Google: {data['error'].get('message', 'Desconocido')}")
-        return pd.DataFrame()
+        st.error(f"Error en {sector_nombre}: {data['error'].get('message')}")
+        return []
         
     lugares = data.get("places", [])
-    if not lugares:
-        return pd.DataFrame()
-
-    negocios = []
+    resultados = []
     
     for p in lugares:
         title = p.get("displayName", {}).get("text", "")
@@ -89,7 +84,7 @@ def consultar_google_maps(query, key, zona_taxonomia):
         rating = p.get("rating", "")
         votos = p.get("userRatingCount", 0)
         
-        # Coordenadas exactas para el Pin del mapa en FindAll
+        # Coordenadas exactas para FindAll
         loc = p.get("location", {})
         lat = loc.get("latitude", "")
         lng = loc.get("longitude", "")
@@ -99,7 +94,7 @@ def consultar_google_maps(query, key, zona_taxonomia):
         horarios_list = hours_obj.get("weekdayDescriptions", [])
         working_hours = " | ".join(horarios_list) if horarios_list else "No informado"
         
-        # Foto oficial (URL compatible con WP All Import Media Downloader)
+        # Foto oficial
         fotos = p.get("photos", [])
         if fotos:
             f_name = fotos[0].get("name", "")
@@ -107,18 +102,17 @@ def consultar_google_maps(query, key, zona_taxonomia):
         else:
             featured_image = ""
             
-        # Categoría oficial según tu listado
+        # Categoría oficial limpia
         category = categorizar_negocio(title, tipos_raw, rubro_es)
         
-        # Generar contenido base para la ficha (Post Content en FindAll)
+        # Contenido HTML para el cuerpo del Listing en FindAll
         rating_texto = f"<p>⭐ Calificación en Google: <strong>{rating}</strong> ({votos} opiniones)</p>" if rating else ""
-        content = f"<p>{rubro_es} ubicado en {zona_taxonomia}, sector {title}.</p>{rating_texto}"
+        content = f"<p>{rubro_es} ubicado en {sector_nombre}, sector {title}.</p>{rating_texto}"
         
-        # Estructura adaptada para WP All Import
-        negocios.append({
+        resultados.append({
             "title": title,
             "category": category,
-            "location_tax": zona_taxonomia,
+            "location_tax": sector_nombre,
             "address": address,
             "latitude": lat,
             "longitude": lng,
@@ -129,65 +123,107 @@ def consultar_google_maps(query, key, zona_taxonomia):
             "content": content
         })
         
-    return pd.DataFrame(negocios)
+    return resultados
+
+# --- PROCESO UNIFICADO (BARRIDO EN LAS 3 ZONAS) ---
+def escanear_toda_la_comuna(termino, key):
+    sectores = [
+        {"nombre": "Requínoa", "query_extra": "Requínoa, Chile"},
+        {"nombre": "Los Lirios", "query_extra": "Los Lirios, Requínoa, Chile"},
+        {"nombre": "El Abra", "query_extra": "El Abra, Requínoa, Chile"}
+    ]
+    
+    todos_los_negocios = []
+    progreso = st.progress(0, text="Iniciando escaneo comunal...")
+    
+    for i, sec in enumerate(sectores):
+        sector_name = sec["nombre"]
+        query = f"{termino} en {sec['query_extra']}".strip() if termino else f"comercios en {sec['query_extra']}"
+        
+        progreso.progress((i) / len(sectores), text=f"Buscando en {sector_name}...")
+        res_sector = consultar_sector(query, key, sector_name)
+        todos_los_negocios.extend(res_sector)
+        time.sleep(0.3)
+        
+    progreso.progress(1.0, text="Consolidando y eliminando duplicados...")
+    
+    if not todos_los_negocios:
+        progreso.empty()
+        return pd.DataFrame()
+        
+    df = pd.DataFrame(todos_los_negocios)
+    
+    # Eliminar duplicados si un negocio salió en más de una zona (por nombre similar o dirección idéntica)
+    df = df.drop_duplicates(subset=["title", "address"], keep="first")
+    
+    progreso.empty()
+    return df
 
 # --- EJECUCIÓN ---
-if "datos_extraidos" not in st.session_state:
-    st.session_state.datos_extraidos = pd.DataFrame()
+if "datos_comunales" not in st.session_state:
+    st.session_state.datos_comunales = pd.DataFrame()
 
 if boton_buscar:
     if not maps_key:
-        st.warning("⚠️ Debes configurar la clave de Google Maps en la barra lateral.")
+        st.warning("⚠️ Ingresa la clave de Google Maps en la barra lateral.")
     else:
-        query_text = f"{termino_especifico} en {zona_a_buscar}, Chile".strip() if termino_especifico else f"comercios en {zona_a_buscar}, Chile"
-        with st.spinner(f"Extrayendo para WordPress: '{query_text}'..."):
-            df_res = consultar_google_maps(query_text, maps_key, zona_a_buscar)
+        with st.spinner("Escaneando Requínoa, Los Lirios y El Abra simultáneamente..."):
+            df_final = escanear_toda_la_comuna(termino_especifico, maps_key)
             
-            if not df_res.empty:
-                st.session_state.datos_extraidos = df_res
-                st.success(f"¡Éxito! {len(df_res)} comercios listos para importar a FindAll.")
+            if not df_final.empty:
+                st.session_state.datos_comunales = df_final
+                st.success(f"¡Escaneo finalizado con éxito! Se consolidaron {len(df_final)} negocios únicos en toda la comuna.")
             else:
-                st.info("No se encontraron comercios.")
+                st.info("No se encontraron resultados para ese rubro en ninguna de las tres zonas.")
 
-# --- DESCARGA PARA WP ALL IMPORT ---
-df_actual = st.session_state.datos_extraidos
+# --- RESULTADOS Y DESCARGA PARA WP ALL IMPORT ---
+df_actual = st.session_state.datos_comunales
 
 if not df_actual.empty:
-    st.subheader(f"Comercios para Importar ({len(df_actual)})")
+    st.subheader(f"Directorio Unificado ({len(df_actual)} comercios)")
+    
+    # Resumen rápido por zona encontrada
+    conteo_zonas = df_actual["location_tax"].value_counts().to_dict()
+    resumen_txt = " | ".join([f"**{z}:** {c}" for z, c in conteo_zonas.items()])
+    st.markdown(f"Distribución: {resumen_txt}")
     
     col_csv, col_excel, _ = st.columns([1, 1, 3])
     
-    # CSV configurado para WP All Import (UTF-8 con punto y coma)
+    # CSV listo para WP All Import
     csv_buf = io.StringIO()
     csv_buf.write('\ufeff')
     df_actual.to_csv(csv_buf, index=False, sep=";")
+    
+    nombre_archivo = f"import_comuna_{termino_especifico or 'general'}"
     col_csv.download_button(
-        label="📥 Descargar CSV para WP All Import",
+        label="📥 Descargar CSV Comunal",
         data=csv_buf.getvalue().encode('utf-8-sig'),
-        file_name=f"import_findall_{zona_a_buscar.lower().replace(' ', '_')}.csv",
+        file_name=f"{nombre_archivo}.csv",
         mime="text/csv"
     )
     
     # Excel
     xls_buf = io.BytesIO()
     with pd.ExcelWriter(xls_buf, engine="openpyxl") as wr:
-        df_actual.to_excel(wr, index=False, sheet_name="WP_Import")
+        df_actual.to_excel(wr, index=False, sheet_name="WP_Import_Comunal")
     col_excel.download_button(
-        label="📊 Descargar Excel",
+        label="📊 Descargar Excel Comunal",
         data=xls_buf.getvalue(),
-        file_name=f"import_findall_{zona_a_buscar.lower().replace(' ', '_')}.xlsx",
+        file_name=f"{nombre_archivo}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
     
     st.write("")
     
-    # Vista previa
+    # Tabla interactiva
     st.dataframe(
         df_actual,
         use_container_width=True,
         hide_index=True,
         column_config={
             "featured_image": st.column_config.ImageColumn("Foto"),
+            "location_tax": st.column_config.TextColumn("Localidad (WP Tax)"),
+            "category": st.column_config.TextColumn("Categoría"),
             "website": st.column_config.LinkColumn("Sitio Web"),
             "latitude": st.column_config.NumberColumn("Latitud", format="%.6f"),
             "longitude": st.column_config.NumberColumn("Longitud", format="%.6f")
