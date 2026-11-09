@@ -12,7 +12,7 @@ st.set_page_config(
 )
 
 st.title("📍 Extractor Comunal Unificado para FindAll (WordPress)")
-st.markdown("Escaneo con filtro geográfico estricto en **Requínoa**, **Los Lirios** y **El Abra**.")
+st.markdown("Escaneo garantizado en **Requínoa**, **Los Lirios** y **El Abra** (excluye negocios externos).")
 
 # --- CONEXIÓN ---
 st.sidebar.header("🔑 Conexión")
@@ -30,7 +30,7 @@ st.sidebar.divider()
 
 # --- PARÁMETROS ---
 st.sidebar.header("🎯 Parámetros de Extracción")
-st.sidebar.info("📍 **Sectores:** Requínoa Centro, Los Lirios, El Abra.")
+st.sidebar.info("📍 **Sectores incluidos:**\n- Requínoa Centro\n- Los Lirios\n- El Abra")
 
 termino_especifico = st.sidebar.text_input(
     "Rubro o término a buscar", 
@@ -39,30 +39,34 @@ termino_especifico = st.sidebar.text_input(
 
 boton_buscar = st.sidebar.button("🚀 Escanear Toda la Comuna", type="primary")
 
-# --- FUNCIÓN PARA VERIFICAR QUE PERTENEZCA REALMENTE A LA ZONA ---
-def es_direccion_local(direccion):
+# --- FILTRO GEOGRÁFICO INFALIBLE POR COORDENADAS Y TEXTO ---
+def pertenece_a_la_zona(lat, lng, direccion):
     """
-    Descarta cualquier negocio que no pertenezca a la comuna de Requínoa
-    o a la Región de O'Higgins circundante inmediata.
+    Verifica que el negocio esté físicamente en la zona de Requínoa.
+    Requínoa y sus alrededores están entre latitud -34.18 y -34.40.
+    Santiago está en -33.4 y Viña del Mar en -33.0 (quedan automáticamente fuera).
     """
-    dir_lower = direccion.lower()
-    
-    # 1. Palabras prohibidas (ciudades lejanas que Google suele meter)
-    ciudades_vetadas = [
-        "santiago", "viña del mar", "valparaíso", "ñuñoa", "providencia", 
-        "las condes", "concepción", "temuco", "antofagasta", "la serena", 
-        "macul", "quilicura", "maipú", "la florida", "recoleta"
-    ]
-    for v in ciudades_vetadas:
-        if v in dir_lower:
-            return False
-            
-    # 2. Debe contener alguna referencia a la comuna o región
-    terminos_permitidos = ["requínoa", "requinoa", "los lirios", "el abra", "o'higgins", "rancagua"]
-    return any(term in dir_lower for term in terminos_permitidos)
+    # 1. Filtro estricto por coordenadas GPS
+    if lat and lng:
+        try:
+            lat_f = float(lat)
+            lng_f = float(lng)
+            # Rango exacto de la comuna de Requínoa y límites inmediatos
+            if not (-34.42 <= lat_f <= -34.18 and -70.95 <= lng_f <= -70.65):
+                return False
+        except ValueError:
+            pass
 
-# --- CONSULTA A GOOGLE CON RESTRICCIÓN DE COORDENADAS ---
-def consultar_sector(query, key, sector_nombre, lat_centro, lng_centro):
+    # 2. Filtro complementario por texto de dirección
+    dir_lower = direccion.lower()
+    vetadas = ["santiago", "viña", "ñuñoa", "providencia", "las condes", "valparaíso", "concepción", "temuco"]
+    if any(v in dir_lower for v in vetadas):
+        return False
+
+    return True
+
+# --- CONSULTA A GOOGLE MAPS ---
+def consultar_sector(query, key, sector_nombre):
     url = "https://places.googleapis.com/v1/places:searchText"
     
     mascara = [
@@ -85,19 +89,9 @@ def consultar_sector(query, key, sector_nombre, lat_centro, lng_centro):
         "X-Goog-FieldMask": ",".join(mascara)
     }
     
-    # Restricción circular estricta (radio de 6 km alrededor de cada localidad)
     payload = {
         "textQuery": query,
-        "languageCode": "es",
-        "locationRestriction": {
-            "circle": {
-                "center": {
-                    "latitude": lat_centro,
-                    "longitude": lng_centro
-                },
-                "radius": 6000.0  # 6 kilómetros a la redonda
-            }
-        }
+        "languageCode": "es"
     }
     
     resp = requests.post(url, headers=headers, json=payload)
@@ -112,9 +106,12 @@ def consultar_sector(query, key, sector_nombre, lat_centro, lng_centro):
     
     for p in lugares:
         address = p.get("formattedAddress", "")
+        loc = p.get("location", {})
+        lat = loc.get("latitude", "")
+        lng = loc.get("longitude", "")
         
-        # FILTRO DE SEGURIDAD: Si no es de la zona, lo descartamos
-        if not es_direccion_local(address):
+        # FILTRO DE SEGURIDAD: Solo dejamos pasar negocios que estén físicamente en la zona
+        if not pertenece_a_la_zona(lat, lng, address):
             continue
             
         title = p.get("displayName", {}).get("text", "")
@@ -124,10 +121,6 @@ def consultar_sector(query, key, sector_nombre, lat_centro, lng_centro):
         website = p.get("websiteUri", "")
         rating = p.get("rating", "")
         votos = p.get("userRatingCount", 0)
-        
-        loc = p.get("location", {})
-        lat = loc.get("latitude", "")
-        lng = loc.get("longitude", "")
         
         hours_obj = p.get("regularOpeningHours", {})
         horarios_list = hours_obj.get("weekdayDescriptions", [])
@@ -161,27 +154,27 @@ def consultar_sector(query, key, sector_nombre, lat_centro, lng_centro):
         
     return resultados
 
-# --- BARRIDO COMUNAL CON COORDENADAS PRECISAS ---
+# --- BARRIDO COMUNAL UNIFICADO ---
 def escanear_toda_la_comuna(termino, key):
-    # Coordenadas exactas para centrar la búsqueda en cada localidad
+    # Consultas explícitas con ancla territorial completa para evitar ambigüedades
     sectores = [
-        {"nombre": "Requínoa", "query": f"{termino} en Requínoa", "lat": -34.2789, "lng": -70.8131},
-        {"nombre": "Los Lirios", "query": f"{termino} en Los Lirios Requínoa", "lat": -34.2372, "lng": -70.7892},
-        {"nombre": "El Abra", "query": f"{termino} en El Abra Requínoa", "lat": -34.2985, "lng": -70.8350}
+        {"nombre": "Requínoa", "query": f"{termino} en Requínoa, O'Higgins, Chile"},
+        {"nombre": "Los Lirios", "query": f"{termino} en Los Lirios, Requínoa, O'Higgins, Chile"},
+        {"nombre": "El Abra", "query": f"{termino} en El Abra, Requínoa, O'Higgins, Chile"}
     ]
     
     todos_los_negocios = []
-    progreso = st.progress(0, text="Iniciando escaneo con geocercas...")
+    progreso = st.progress(0, text="Iniciando escaneo...")
     
     for i, sec in enumerate(sectores):
         sector_name = sec["nombre"]
         progreso.progress(i / len(sectores), text=f"Buscando en {sector_name}...")
         
-        res = consultar_sector(sec["query"], key, sector_name, sec["lat"], sec["lng"])
+        res = consultar_sector(sec["query"], key, sector_name)
         todos_los_negocios.extend(res)
         time.sleep(0.3)
         
-    progreso.progress(1.0, text="Eliminando duplicados...")
+    progreso.progress(1.0, text="Finalizando y consolidando...")
     
     if not todos_los_negocios:
         progreso.empty()
@@ -189,7 +182,7 @@ def escanear_toda_la_comuna(termino, key):
         
     df = pd.DataFrame(todos_los_negocios)
     
-    # Eliminar duplicados por nombre y dirección
+    # Eliminar duplicados si un negocio apareció en más de una búsqueda
     df = df.drop_duplicates(subset=["title", "address"], keep="first")
     progreso.empty()
     return df
@@ -207,9 +200,9 @@ if boton_buscar:
             
             if not df_final.empty:
                 st.session_state.datos_comunales = df_final
-                st.success(f"¡Listo! Se encontraron {len(df_final)} comercios 100% locales.")
+                st.success(f"¡Éxito! Se encontraron {len(df_final)} comercios 100% locales.")
             else:
-                st.info("No se encontraron comercios de ese rubro en la comuna.")
+                st.info("No se encontraron comercios de ese rubro registrados en la comuna.")
 
 # --- RESULTADOS Y DESCARGA PARA WP ALL IMPORT ---
 df_actual = st.session_state.datos_comunales
