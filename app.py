@@ -12,9 +12,9 @@ st.set_page_config(
 )
 
 st.title("📍 Extractor Comunal Unificado para FindAll (WordPress)")
-st.markdown("Escaneo simultáneo en **Requínoa**, **Los Lirios** y **El Abra** con salida lista para **WP All Import**.")
+st.markdown("Escaneo con filtro geográfico estricto en **Requínoa**, **Los Lirios** y **El Abra**.")
 
-# --- CONEXIÓN DE CLAVE ---
+# --- CONEXIÓN ---
 st.sidebar.header("🔑 Conexión")
 maps_key = st.secrets.get("GOOGLE_MAPS_KEY", "") or st.secrets.get("GOOGLE_API_KEY", "")
 
@@ -28,19 +28,41 @@ else:
 
 st.sidebar.divider()
 
-# --- PARÁMETROS DE BÚSQUEDA ---
+# --- PARÁMETROS ---
 st.sidebar.header("🎯 Parámetros de Extracción")
-st.sidebar.info("📍 **Sectores incluidos:**\n- Requínoa Centro\n- Los Lirios\n- El Abra")
+st.sidebar.info("📍 **Sectores:** Requínoa Centro, Los Lirios, El Abra.")
 
 termino_especifico = st.sidebar.text_input(
     "Rubro o término a buscar", 
-    placeholder="Ej: ferreteria, restaurante, almacen, peluqueria..."
+    placeholder="Ej: libreria, ferreteria, restaurante, taller..."
 )
 
 boton_buscar = st.sidebar.button("🚀 Escanear Toda la Comuna", type="primary")
 
-# --- FUNCIÓN DE CONSULTA POR SECTOR ---
-def consultar_sector(query, key, sector_nombre):
+# --- FUNCIÓN PARA VERIFICAR QUE PERTENEZCA REALMENTE A LA ZONA ---
+def es_direccion_local(direccion):
+    """
+    Descarta cualquier negocio que no pertenezca a la comuna de Requínoa
+    o a la Región de O'Higgins circundante inmediata.
+    """
+    dir_lower = direccion.lower()
+    
+    # 1. Palabras prohibidas (ciudades lejanas que Google suele meter)
+    ciudades_vetadas = [
+        "santiago", "viña del mar", "valparaíso", "ñuñoa", "providencia", 
+        "las condes", "concepción", "temuco", "antofagasta", "la serena", 
+        "macul", "quilicura", "maipú", "la florida", "recoleta"
+    ]
+    for v in ciudades_vetadas:
+        if v in dir_lower:
+            return False
+            
+    # 2. Debe contener alguna referencia a la comuna o región
+    terminos_permitidos = ["requínoa", "requinoa", "los lirios", "el abra", "o'higgins", "rancagua"]
+    return any(term in dir_lower for term in terminos_permitidos)
+
+# --- CONSULTA A GOOGLE CON RESTRICCIÓN DE COORDENADAS ---
+def consultar_sector(query, key, sector_nombre, lat_centro, lng_centro):
     url = "https://places.googleapis.com/v1/places:searchText"
     
     mascara = [
@@ -63,7 +85,21 @@ def consultar_sector(query, key, sector_nombre):
         "X-Goog-FieldMask": ",".join(mascara)
     }
     
-    payload = {"textQuery": query, "languageCode": "es"}
+    # Restricción circular estricta (radio de 6 km alrededor de cada localidad)
+    payload = {
+        "textQuery": query,
+        "languageCode": "es",
+        "locationRestriction": {
+            "circle": {
+                "center": {
+                    "latitude": lat_centro,
+                    "longitude": lng_centro
+                },
+                "radius": 6000.0  # 6 kilómetros a la redonda
+            }
+        }
+    }
+    
     resp = requests.post(url, headers=headers, json=payload)
     data = resp.json()
     
@@ -75,26 +111,28 @@ def consultar_sector(query, key, sector_nombre):
     resultados = []
     
     for p in lugares:
+        address = p.get("formattedAddress", "")
+        
+        # FILTRO DE SEGURIDAD: Si no es de la zona, lo descartamos
+        if not es_direccion_local(address):
+            continue
+            
         title = p.get("displayName", {}).get("text", "")
         tipos_raw = ", ".join(p.get("types", []))
         rubro_es = p.get("primaryTypeDisplayName", {}).get("text", "Comercio")
-        address = p.get("formattedAddress", "")
         phone = p.get("nationalPhoneNumber", "")
         website = p.get("websiteUri", "")
         rating = p.get("rating", "")
         votos = p.get("userRatingCount", 0)
         
-        # Coordenadas exactas para FindAll
         loc = p.get("location", {})
         lat = loc.get("latitude", "")
         lng = loc.get("longitude", "")
         
-        # Horarios
         hours_obj = p.get("regularOpeningHours", {})
         horarios_list = hours_obj.get("weekdayDescriptions", [])
         working_hours = " | ".join(horarios_list) if horarios_list else "No informado"
         
-        # Foto oficial
         fotos = p.get("photos", [])
         if fotos:
             f_name = fotos[0].get("name", "")
@@ -102,10 +140,8 @@ def consultar_sector(query, key, sector_nombre):
         else:
             featured_image = ""
             
-        # Categoría oficial limpia
         category = categorizar_negocio(title, tipos_raw, rubro_es)
         
-        # Contenido HTML para el cuerpo del Listing en FindAll
         rating_texto = f"<p>⭐ Calificación en Google: <strong>{rating}</strong> ({votos} opiniones)</p>" if rating else ""
         content = f"<p>{rubro_es} ubicado en {sector_nombre}, sector {title}.</p>{rating_texto}"
         
@@ -125,27 +161,27 @@ def consultar_sector(query, key, sector_nombre):
         
     return resultados
 
-# --- PROCESO UNIFICADO (BARRIDO EN LAS 3 ZONAS) ---
+# --- BARRIDO COMUNAL CON COORDENADAS PRECISAS ---
 def escanear_toda_la_comuna(termino, key):
+    # Coordenadas exactas para centrar la búsqueda en cada localidad
     sectores = [
-        {"nombre": "Requínoa", "query_extra": "Requínoa, Chile"},
-        {"nombre": "Los Lirios", "query_extra": "Los Lirios, Requínoa, Chile"},
-        {"nombre": "El Abra", "query_extra": "El Abra, Requínoa, Chile"}
+        {"nombre": "Requínoa", "query": f"{termino} en Requínoa", "lat": -34.2789, "lng": -70.8131},
+        {"nombre": "Los Lirios", "query": f"{termino} en Los Lirios Requínoa", "lat": -34.2372, "lng": -70.7892},
+        {"nombre": "El Abra", "query": f"{termino} en El Abra Requínoa", "lat": -34.2985, "lng": -70.8350}
     ]
     
     todos_los_negocios = []
-    progreso = st.progress(0, text="Iniciando escaneo comunal...")
+    progreso = st.progress(0, text="Iniciando escaneo con geocercas...")
     
     for i, sec in enumerate(sectores):
         sector_name = sec["nombre"]
-        query = f"{termino} en {sec['query_extra']}".strip() if termino else f"comercios en {sec['query_extra']}"
+        progreso.progress(i / len(sectores), text=f"Buscando en {sector_name}...")
         
-        progreso.progress((i) / len(sectores), text=f"Buscando en {sector_name}...")
-        res_sector = consultar_sector(query, key, sector_name)
-        todos_los_negocios.extend(res_sector)
+        res = consultar_sector(sec["query"], key, sector_name, sec["lat"], sec["lng"])
+        todos_los_negocios.extend(res)
         time.sleep(0.3)
         
-    progreso.progress(1.0, text="Consolidando y eliminando duplicados...")
+    progreso.progress(1.0, text="Eliminando duplicados...")
     
     if not todos_los_negocios:
         progreso.empty()
@@ -153,9 +189,8 @@ def escanear_toda_la_comuna(termino, key):
         
     df = pd.DataFrame(todos_los_negocios)
     
-    # Eliminar duplicados si un negocio salió en más de una zona (por nombre similar o dirección idéntica)
+    # Eliminar duplicados por nombre y dirección
     df = df.drop_duplicates(subset=["title", "address"], keep="first")
-    
     progreso.empty()
     return df
 
@@ -167,64 +202,56 @@ if boton_buscar:
     if not maps_key:
         st.warning("⚠️ Ingresa la clave de Google Maps en la barra lateral.")
     else:
-        with st.spinner("Escaneando Requínoa, Los Lirios y El Abra simultáneamente..."):
+        with st.spinner("Escaneando exclusivamente Requínoa, Los Lirios y El Abra..."):
             df_final = escanear_toda_la_comuna(termino_especifico, maps_key)
             
             if not df_final.empty:
                 st.session_state.datos_comunales = df_final
-                st.success(f"¡Escaneo finalizado con éxito! Se consolidaron {len(df_final)} negocios únicos en toda la comuna.")
+                st.success(f"¡Listo! Se encontraron {len(df_final)} comercios 100% locales.")
             else:
-                st.info("No se encontraron resultados para ese rubro en ninguna de las tres zonas.")
+                st.info("No se encontraron comercios de ese rubro en la comuna.")
 
 # --- RESULTADOS Y DESCARGA PARA WP ALL IMPORT ---
 df_actual = st.session_state.datos_comunales
 
 if not df_actual.empty:
-    st.subheader(f"Directorio Unificado ({len(df_actual)} comercios)")
+    st.subheader(f"Directorio Comunal Limpio ({len(df_actual)} comercios)")
     
-    # Resumen rápido por zona encontrada
     conteo_zonas = df_actual["location_tax"].value_counts().to_dict()
-    resumen_txt = " | ".join([f"**{z}:** {c}" for z, c in conteo_zonas.items()])
-    st.markdown(f"Distribución: {resumen_txt}")
+    st.markdown("Distribución real: " + " | ".join([f"**{z}:** {c}" for z, c in conteo_zonas.items()]))
     
     col_csv, col_excel, _ = st.columns([1, 1, 3])
     
-    # CSV listo para WP All Import
     csv_buf = io.StringIO()
     csv_buf.write('\ufeff')
     df_actual.to_csv(csv_buf, index=False, sep=";")
     
-    nombre_archivo = f"import_comuna_{termino_especifico or 'general'}"
     col_csv.download_button(
-        label="📥 Descargar CSV Comunal",
+        label="📥 Descargar CSV para WP All Import",
         data=csv_buf.getvalue().encode('utf-8-sig'),
-        file_name=f"{nombre_archivo}.csv",
+        file_name=f"import_wp_{termino_especifico or 'comuna'}.csv",
         mime="text/csv"
     )
     
-    # Excel
     xls_buf = io.BytesIO()
     with pd.ExcelWriter(xls_buf, engine="openpyxl") as wr:
-        df_actual.to_excel(wr, index=False, sheet_name="WP_Import_Comunal")
+        df_actual.to_excel(wr, index=False, sheet_name="WP_Import")
     col_excel.download_button(
-        label="📊 Descargar Excel Comunal",
+        label="📊 Descargar Excel",
         data=xls_buf.getvalue(),
-        file_name=f"{nombre_archivo}.xlsx",
+        file_name=f"import_wp_{termino_especifico or 'comuna'}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
     
     st.write("")
-    
-    # Tabla interactiva
     st.dataframe(
         df_actual,
         use_container_width=True,
         hide_index=True,
         column_config={
             "featured_image": st.column_config.ImageColumn("Foto"),
-            "location_tax": st.column_config.TextColumn("Localidad (WP Tax)"),
-            "category": st.column_config.TextColumn("Categoría"),
-            "website": st.column_config.LinkColumn("Sitio Web"),
+            "location_tax": st.column_config.TextColumn("Localidad"),
+            "website": st.column_config.LinkColumn("Web"),
             "latitude": st.column_config.NumberColumn("Latitud", format="%.6f"),
             "longitude": st.column_config.NumberColumn("Longitud", format="%.6f")
         }
